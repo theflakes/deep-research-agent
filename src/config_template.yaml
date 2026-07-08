@@ -2,6 +2,20 @@ api:
   openai_base_url: http://localhost:8080/v1
   openai_model: local-model
 settings:
+  search:
+    provider: searxng
+    searxng:
+      base_url: http://tor-searxng:8888
+      # Each web_search does TWO API calls:
+      #   1) Standard engines (google, duckduckgo, bing, brave, wikipedia) — regular web results
+      #   2) Tor engines (!ahmia !torch) — .onion site results
+      tor_engines: ahmia,torch
+      standard_engines: google,duckduckgo,bing,brave,wikipedia
+  proxy:
+    # ALL network connections MUST route through this Tor SOCKS5h proxy.
+    # socks5h means DNS resolution also happens through Tor (no DNS leaks).
+    # Applies to: web_search, fetch_url_to_workspace, markitdown, DDGS fallback.
+    tor_proxy_url: socks5h://tor-proxy:9050
   enable_thinking: false
   concurrency:
     max_concurrent_tasks: 3
@@ -32,5 +46,5 @@ settings:
   workspace:
     type: disk
     dir: "~/.{APP_NAME}/workspace"
-    session_isolation: true  # Auto-creates timestamped run folders (e.g. run_1748192400/)
+    session_isolation: true # Auto-creates timestamped run folders (e.g. run_1748192400/)
     required_artifact: "final_report.md"

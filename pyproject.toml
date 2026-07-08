@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 dependencies = [
     "agent-framework",
     "python-dotenv",
-    "httpx",
+    "httpx[socks]",
     "textual",
     "beautifulsoup4",
     "PyYAML",

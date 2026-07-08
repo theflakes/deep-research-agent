@@ -136,7 +136,7 @@ python src/app.py --prompt "Compare the AI research strategies of OpenAI, Google
 
 | Tool | Description |
 |------|-------------|
-| `web_search` | DuckDuckGo search (no API key needed) |
+| `web_search` | SearXNG search — automatically queries both standard engines (Google, DuckDuckGo, Bing, Brave, Wikipedia) AND Tor .onion sites (Ahmia, Torch) |
 | `fetch_url_to_workspace` | Fetch URLs → parse to Markdown → save to workspace |
 | `read_workspace_file` | Read files with line-range chunking |
 | `grep_workspace_file` | Regex search within workspace files |
