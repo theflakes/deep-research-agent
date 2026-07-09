@@ -33,12 +33,9 @@ def _get_proxy():
 
 def _make_socks_transport(proxy_url):
     """Create an httpx transport that routes all traffic through a SOCKS5h proxy."""
-    if not hasattr(httpx, "SOCKSTransport"):
-        raise ImportError(
-            "httpx[socks] is not installed (socksio missing). "
-            "Run: pip install httpx[socks] or pip install socksio"
-        )
-    return httpx.SOCKSTransport(proxy_url)
+    from httpx._transports.default import SOCKSTransport
+
+    return SOCKSTransport(proxy_url)
 
 
 def get_searxng_client():
