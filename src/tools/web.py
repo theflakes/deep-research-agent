@@ -31,10 +31,94 @@ def _get_proxy():
     )
 
 
+import socket
+import ssl
+
+import httpx
+
+
+class _SOCKSTransport(httpx.BaseTransport):
+    def __init__(self, proxy_url):
+        self._proxy_url = proxy_url
+        self._closed = False
+
+    def handle_request(self, request):
+        if self._closed:
+            raise RuntimeError("Transport is closed")
+        proxy_url = self._proxy_url
+        for prefix in ("socks5h://", "socks5://", "socks4://"):
+            if proxy_url.startswith(prefix):
+                proxy_url = proxy_url[len(prefix) :]
+                break
+        username = password = None
+        if "@" in proxy_url:
+            auth, proxy_url = proxy_url.rsplit("@", 1)
+            if ":" in auth:
+                username, password = auth.split(":", 1)
+            else:
+                username = auth
+        if ":" in proxy_url:
+            proxy_host, port_str = proxy_url.rsplit(":", 1)
+            proxy_port = int(port_str)
+        else:
+            proxy_host = proxy_url
+            proxy_port = 1080
+        target_host = request.url.host
+        target_port = request.url.port or (443 if request.url.scheme == "https" else 80)
+        sock = socket.create_connection((proxy_host, proxy_port), timeout=30)
+        try:
+            from socksio.socks5 import socks5_client
+
+            if request.url.scheme == "https":
+                conn = socks5_client(sock, target_host, target_port, username, password)
+                conn.sendall(
+                    (f"CONNECT {target_host}:{target_port} HTTP/1.1\r\nHost: {target_host}:{target_port}\r\n\r\n").encode()
+                )
+                resp = b""
+                while b"\r\n\r\n" not in resp:
+                    resp += conn.recv(4096)
+                if b"200" not in resp:
+                    raise RuntimeError(f"CONNECT failed: {resp}")
+                ctx = ssl.create_default_context()
+                conn = ctx.wrap_socket(conn, server_hostname=target_host)
+            else:
+                conn = socks5_client(sock, target_host, target_port, username, password)
+            conn.sendall(request.read())
+            resp_data = b""
+            while True:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                resp_data += chunk
+            sep = resp_data.find(b"\r\n\r\n")
+            if sep >= 0:
+                hdr = resp_data[:sep]
+                body = resp_data[sep + 4 :]
+            else:
+                hdr = resp_data
+                body = b"
+            lines = hdr.split(b"\r\n")
+            parts = lines[0].decode("utf-8", errors="replace").split(" ", 2)
+            status_code = int(parts[1]) if len(parts) > 1 else 500
+            headers = []
+            for line in lines[1:]:
+                idx = line.find(b":")
+                if idx > 0:
+                    headers.append((line[:idx].strip(), line[idx + 1 :].strip()))
+            return httpx.Response(status_code=status_code, headers=headers, content=body, request=request)
+        except Exception:
+            sock.close()
+            raise
+
+    def close(self):
+        self._closed = True
+
+    def aclose(self):
+        self.close()
+
+
 def _make_socks_transport(proxy_url):
     """Create an httpx transport that routes all traffic through a SOCKS5h proxy."""
-    from utils.proxy import _SOCKSTransport
-
     return _SOCKSTransport(proxy_url)
 
 

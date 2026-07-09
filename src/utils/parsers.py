@@ -41,7 +41,7 @@ def _get_markitdown():
             .get("tor_proxy_url", "socks5h://tor-proxy:9050")
         )
         if _httpx_available:
-            from utils.proxy import _SOCKSTransport
+            from tools.web import _SOCKSTransport
 
             httpx_client = httpx.Client(
                 timeout=30,
