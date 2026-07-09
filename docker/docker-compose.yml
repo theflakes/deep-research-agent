@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  # Tor SOCKS Proxy matching configuration key 'tor_proxy_url: socks5h://tor-proxy:9050'
+  tor-proxy:
+    image: peterdavehello/tor-socks-proxy:latest
+    container_name: tor-proxy
+    restart: unless-stopped
+    networks:
+      - research-net
+
+  # Redis Database backend for SearXNG
+  searxng-redis:
+    image: redis:7-alpine
+    container_name: searxng-redis
+    command: redis-server --save "" --appendonly no
+    restart: unless-stopped
+    networks:
+      - research-net
+
+  # SearXNG Engine matching configuration key 'base_url: http://tor-searxng:8888'
+  tor-searxng:
+    image: searxng/searxng:latest
+    container_name: tor-searxng
+    restart: unless-stopped
+    volumes:
+      - ./searxng.yml:/etc/searxng/settings.yml:ro
+    networks:
+      - research-net
+    depends_on:
+      - tor-proxy
+      - searxng-redis
+
+  # Interactive Python TUI Agent
+  research-agent:
+    build:
+      context: .
+      dockerfile: agent.Dockerfile
+    container_name: deep-research-agent
+    # TUI Interactive TTY parameters
+    tty: true
+    stdin_open: true
+    environment:
+      - TERM=xterm-256color # Forces rich text/color rendering inside the TUI application
+    volumes:
+      # Maps your local data storage to the container root path
+      - ~/.deep-research-agent:/root/.deep-research-agent
+    networks:
+      - research-net
+    depends_on:
+      - tor-searxng
+
+networks:
+  research-net:
+    driver: bridge

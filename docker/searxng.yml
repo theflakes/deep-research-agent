@@ -1,0 +1,44 @@
+use_default_settings: true
+general:
+  debug: false
+  instance_name: "SearXNG"
+  privacypolicy_url: false
+  contact_url: false
+server:
+  bind_address: "0.0.0.0"
+  port: 8888
+  secret_key: "6dcfb437298a0efca1139ad429efcb93" # Randomized placeholder
+  limiter: false
+  image_proxy: true
+redis:
+  url: "redis://searxng-redis:6379/0"
+ui:
+  static_use_hash: true
+enabled_plugins:
+  - 'Hash plugin'
+  - 'Self Information'
+  - 'Tracker URL remover'
+  - 'Ahmia blacklist'
+  - 'Unit converter plugin'
+search:
+  safe_search: 2
+  autocomplete: 'google'
+  formats:
+    - html
+    - json
+engines:
+  - name: google
+    engine: google
+    shortcut: gg
+    use_mobile_ui: false
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    display_error_messages: true
+outgoing:
+  request_timeout: 5.0
+  proxies:
+    all://:
+      - socks5h://tor-proxy:9050
+  using_tor_proxy: true
+  extra_proxy_timeout: 30
