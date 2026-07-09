@@ -41,11 +41,9 @@ def _get_markitdown():
             .get("tor_proxy_url", "socks5h://tor-proxy:9050")
         )
         if _httpx_available:
-            from httpx._transports.default import SOCKSTransport
-
             httpx_client = httpx.Client(
                 timeout=30,
-                mounts={"all://": SOCKSTransport(proxy_url)},
+                mounts={"all://": httpx.SOCKSTransport(proxy_url)},
             )
             _markitdown_instance = MarkItDown(httpx_client=httpx_client)
         else:
