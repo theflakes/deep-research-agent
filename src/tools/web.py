@@ -31,6 +31,11 @@ def _get_proxy():
     )
 
 
+def _make_socks_transport(proxy_url):
+    """Create an httpx transport that routes all traffic through a SOCKS5h proxy."""
+    return httpx.SOCKSTransport(proxy_url)
+
+
 def get_searxng_client():
     """Thread-safe lazy initialization of the SearXNG HTTP client.
     All traffic is routed through the Tor SOCKS5h proxy."""
@@ -38,7 +43,9 @@ def get_searxng_client():
     with _searxng_lock:
         if _searxng_client is None:
             proxy_url = _get_proxy()
-            _searxng_client = httpx.Client(timeout=30, proxies={"all://": proxy_url})
+            _searxng_client = httpx.Client(
+                timeout=30, mounts={"all://": _make_socks_transport(proxy_url)}
+            )
     return _searxng_client
 
 
@@ -92,7 +99,7 @@ async def fetch_url_to_workspace(
             headers=headers,
             timeout=30,
             follow_redirects=True,
-            proxies={"all://": proxy_url},
+            transport=_make_socks_transport(proxy_url),
         )
 
         if not convert_to_md:
