@@ -33,7 +33,9 @@ def _get_proxy():
 
 def _make_socks_transport(proxy_url):
     """Create an httpx transport that routes all traffic through a SOCKS5h proxy."""
-    return httpx.SOCKSTransport(proxy_url)
+    from utils.proxy import _SOCKSTransport
+
+    return _SOCKSTransport(proxy_url)
 
 
 def get_searxng_client():
