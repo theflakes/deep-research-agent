@@ -3,7 +3,35 @@
 This stack orchestrates an isolated research environment featuring a containerized custom Python agent running an interactive Terminal User Interface (TUI). All workspace data, session maps, and report artifacts are persistently stored in your local host home directory (`~/.deep-research-agent`).
 
 ## Setup and Run Guide
-
+```
+[ Host Machine / Local Subnet ]
+                │
+  ┌─────────────▼────────────────────────────────────────┐
+  │ Docker Bridge Network ("research-net")               │
+  │                                                      │
+  │  ┌────────────────┐       ┌──────────────┐           │
+  │  │ research-agent │ ───►  │ tor-searxng  │           │
+  │  └────────────────┘       └──────┬───────┘           │
+  │                                  │                   │
+  │                                  ▼ (SOCKS5h Proxy)   │
+  │                           ┌──────────────┐           │
+  │                           │  tor-proxy   │           │
+  │                           └──────┬───────┘           │
+  └──────────────────────────────────┼───────────────────┘
+                                     │
+                                     ▼ [ Docker NAT / Host Gateway ]
+                                     │
+                        ┌────────────┴────────────┐
+                        │ Public Tor Network      │
+                        │ (Entry ──► Mid ──► Exit)│
+                        └────────────┬────────────┘
+                                     │
+                                     ▼
+                        ┌─────────────────────────┐
+                        │  Clear Web or .onion    │
+                        │  (Google, DDG, Ahmia)   │
+                        └─────────────────────────┘
+```
 ### 1. Initialize Configuration Directory
 Because the application writes its workspaces to `~/.{APP_NAME}/workspace`, we map the container's root home folder directly to your local drive. 
 
