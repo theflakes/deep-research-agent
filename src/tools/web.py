@@ -1,5 +1,6 @@
 import asyncio
 import os
+import random
 import re
 import threading
 
@@ -11,17 +12,21 @@ from tools.core import with_quota
 from tools.fs import (
     _IN_MEMORY_FS,
     _get_safe_path,
-    _get_workspace_dir,
     _get_workspace_type,
 )
 
-# Thread-safe SearXNG HTTP client — all traffic routes through Tor
 _searxng_client = None
 _searxng_lock = threading.Lock()
 
+_ddgs_client = None
+_ddgs_lock = threading.Lock()
 
-def _get_proxy():
-    """Read Tor SOCKS5h proxy URL from config."""
+_SESSION_BROWSER_PROFILE = None
+
+BLOCKED_STATUS_CODES = {401, 403, 429, 451}
+
+
+def _get_proxy() -> str:
     import config as app_config
 
     return (
@@ -31,152 +36,70 @@ def _get_proxy():
     )
 
 
-import socket
-import ssl
+def _get_fetch_cfg() -> dict:
+    import config as app_config
 
-import httpx
-
-
-class _SOCKSTransport(httpx.BaseTransport):
-    def __init__(self, proxy_url):
-        self._proxy_url = proxy_url
-        self._closed = False
-
-    def handle_request(self, request):
-        if self._closed:
-            raise RuntimeError("Transport is closed")
-        proxy_url = self._proxy_url
-        for prefix in ("socks5h://", "socks5://", "socks4://"):
-            if proxy_url.startswith(prefix):
-                proxy_url = proxy_url[len(prefix) :]
-                break
-        username = password = None
-        if "@" in proxy_url:
-            auth, proxy_url = proxy_url.rsplit("@", 1)
-            if ":" in auth:
-                username, password = auth.split(":", 1)
-            else:
-                username = auth
-        if ":" in proxy_url:
-            proxy_host, port_str = proxy_url.rsplit(":", 1)
-            proxy_port = int(port_str)
-        else:
-            proxy_host = proxy_url
-            proxy_port = 1080
-        target_host = request.url.host
-        target_port = request.url.port or (443 if request.url.scheme == "https" else 80)
-        sock = socket.create_connection((proxy_host, proxy_port), timeout=30)
-        try:
-            # SOCKS5 handshake
-            # Step 1: Send greeting
-            if username and password:
-                sock.sendall(b"\x05\x02\x00\x02")  # ver 5, methods: none + auth
-            else:
-                sock.sendall(b"\x05\x01\x00")  # ver 5, method: none
-            resp = sock.recv(2)
-            if resp[0] != 0x05 or resp[1] == 0xFF:
-                raise RuntimeError("SOCKS5 greeting failed")
-            if resp[1] == 0x02:
-                cred = b"\x01" + bytes([len(username)]) + username.encode() + bytes([len(password)]) + password.encode()
-                sock.sendall(cred)
-                if sock.recv(2)[1] != 0:
-                    raise RuntimeError("SOCKS5 auth failed")
-
-            # Step 2: Build CONNECT request with correct address type
-            try:
-                import ipaddress
-                ip = ipaddress.ip_address(target_host)
-                if isinstance(ip, ipaddress.IPv4Address):
-                    cmd = b"\x05\x01\x00\x01" + socket.inet_aton(target_host) + target_port.to_bytes(2, "big")
-                else:
-                    cmd = b"\x05\x01\x00\x04" + socket.inet_pton(socket.AF_INET6, target_host) + target_port.to_bytes(2, "big")
-            except ValueError:
-                cmd = b"\x05\x01\x00\x03" + bytes([len(target_host)]) + target_host.encode() + target_port.to_bytes(2, "big")
-            sock.sendall(cmd)
-
-            # Step 3: Receive CONNECT response and skip bind address
-            resp = sock.recv(4)
-            if resp[0] != 0x05 or resp[1] != 0:
-                raise RuntimeError(f"SOCKS5 CONNECT failed: {resp[1]}")
-            atyp = resp[3]
-            if atyp == 1:  # IPv4
-                sock.recv(6)
-            elif atyp == 3:  # Domain
-                dlen = sock.recv(1)[0]
-                sock.recv(dlen + 2)
-            elif atyp == 4:  # IPv6
-                sock.recv(18)
-
-            # Step 4: Send HTTP request
-            if request.url.scheme == "https":
-                conn = ssl.create_default_context().wrap_socket(sock, server_hostname=target_host)
-            else:
-                conn = sock
-            conn.sendall(request.read())
-            resp_data = b""
-            while True:
-                chunk = conn.recv(4096)
-                if not chunk:
-                    break
-                resp_data += chunk
-            sep = resp_data.find(b"\r\n\r\n")
-            if sep >= 0:
-                hdr = resp_data[:sep]
-                body = resp_data[sep + 4 :]
-            else:
-                hdr = resp_data
-                body = b""
-            lines = hdr.split(b"\r\n")
-            parts = lines[0].decode("utf-8", errors="replace").split(" ", 2)
-            status_code = int(parts[1]) if len(parts) > 1 else 500
-            headers = []
-            for line in lines[1:]:
-                idx = line.find(b":")
-                if idx > 0:
-                    headers.append((line[:idx].strip(), line[idx + 1 :].strip()))
-            return httpx.Response(status_code=status_code, headers=headers, content=body, request=request)
-        except Exception:
-            sock.close()
-            raise
-
-    def close(self):
-        self._closed = True
-
-    def aclose(self):
-        self.close()
+    return app_config.cfg.get("settings", {}).get("fetch", {})
 
 
-def _make_socks_transport(proxy_url):
-    """Create an httpx transport that routes all traffic through a SOCKS5h proxy."""
-    return _SOCKSTransport(proxy_url)
+def _build_fetch_headers() -> dict:
+    import config as app_config
+    import random
+
+    global _SESSION_BROWSER_PROFILE
+
+    fetch_cfg = app_config.cfg.get("settings", {}).get("fetch", {})
+
+    browser_profiles = fetch_cfg.get("browser_profiles", {})
+    rotate_browser_profile = fetch_cfg.get("rotate_browser_profile", False)
+
+    if not browser_profiles:
+        return {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+        }
+
+    profile_names = list(browser_profiles.keys())
+
+    if rotate_browser_profile:
+        profile_name = random.choice(profile_names)
+    else:
+        if _SESSION_BROWSER_PROFILE not in browser_profiles:
+            _SESSION_BROWSER_PROFILE = random.choice(profile_names)
+        profile_name = _SESSION_BROWSER_PROFILE
+
+    return dict(browser_profiles[profile_name])
 
 
-def get_searxng_client():
-    """Thread-safe lazy initialization of the SearXNG HTTP client.
-    All traffic is routed through the Tor SOCKS5h proxy."""
+def _make_tor_httpx_client(**kwargs) -> httpx.Client:
+    proxy_url = _get_proxy()
+
+    try:
+        return httpx.Client(proxy=proxy_url, **kwargs)
+    except TypeError:
+        return httpx.Client(proxies=proxy_url, **kwargs)
+
+
+def get_searxng_client() -> httpx.Client:
     global _searxng_client
+
     with _searxng_lock:
         if _searxng_client is None:
-            proxy_url = _get_proxy()
             _searxng_client = httpx.Client(
-                timeout=30, mounts={"all://": _make_socks_transport(proxy_url)}
+                timeout=httpx.Timeout(30.0),
+                follow_redirects=True,
             )
+
     return _searxng_client
 
 
-_ddgs_lock = threading.Lock()
-_ddgs_client = None
-
-
 def get_ddgs_client():
-    """Thread-safe lazy initialization of the DDGS client.
-    All traffic is routed through the Tor SOCKS5h proxy."""
     global _ddgs_client
+
     with _ddgs_lock:
         if _ddgs_client is None:
-            # Set Tor proxy so ddgs (via primp) routes all traffic through it
-            import os
-
             proxy_url = _get_proxy()
             os.environ["ALL_PROXY"] = proxy_url
             os.environ["all_proxy"] = proxy_url
@@ -184,71 +107,122 @@ def get_ddgs_client():
             from ddgs import DDGS
 
             _ddgs_client = DDGS()
-            # Pre-warm the internal engine cache to prevent PyO3 deadlocks
-            # when multiple threads initialize primp.Client concurrently later.
-            _ddgs_client._get_engines("text", "auto")
-            _ddgs_client._get_engines("news", "auto")
+
+            try:
+                _ddgs_client._get_engines("text", "auto")
+                _ddgs_client._get_engines("news", "auto")
+            except Exception:
+                pass
+
     return _ddgs_client
+
+
+def _sanitize_snippet(text: str) -> str:
+    text = text or ""
+    text = re.sub(r"<svg[\s\S]*?</svg>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"<style[\s\S]*?</style>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"(?:[\w-]+=(?:'[^']*'|\"[^\"]*\")[\s]*){3,}", "", text)
+    text = re.sub(r"%3[CEce][^%\s]{10,}", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _blocked_response_message(url: str, status_code: int, reason: str = "") -> str:
+    return (
+        f"[FETCH BLOCKED: {status_code} {reason} for {url}. "
+        "The site likely blocks Tor, datacenter IPs, or non-browser clients. "
+        "Privacy preserved: no non-Tor retry was attempted. "
+        "Use the search result snippet, try another source, or manually provide the page text.]"
+    )
+
+
+def _fetch_with_privacy(url: str) -> httpx.Response | str:
+    try:
+        with _make_tor_httpx_client(
+            timeout=30,
+            follow_redirects=True,
+            headers=_build_fetch_headers(),
+        ) as client:
+            resp = client.get(url)
+
+        if resp.status_code in BLOCKED_STATUS_CODES:
+            return _blocked_response_message(
+                url=url,
+                status_code=resp.status_code,
+                reason=resp.reason_phrase,
+            )
+
+        resp.raise_for_status()
+        return resp
+
+    except httpx.ProxyError as e:
+        return (
+            f"[FETCH FAILED: Tor SOCKS proxy error for {url}: {e}. "
+            "Privacy preserved: no direct-network retry was attempted.]"
+        )
+
+    except httpx.ConnectError as e:
+        return (
+            f"[FETCH FAILED: connection error through Tor for {url}: {e}. "
+            "Privacy preserved: no direct-network retry was attempted.]"
+        )
+
+    except httpx.TimeoutException:
+        return (
+            f"[FETCH FAILED: timeout fetching {url} through Tor. "
+            "Privacy preserved: no direct-network retry was attempted.]"
+        )
+
+    except httpx.HTTPStatusError as e:
+        return (
+            f"[FETCH FAILED: HTTP {e.response.status_code} for {url}. "
+            "Privacy preserved: no direct-network retry was attempted.]"
+        )
 
 
 @tool
 @with_quota
 async def fetch_url_to_workspace(
-    url: str, filename: str, convert_to_md: bool = True
+    url: str,
+    filename: str,
+    convert_to_md: bool = True,
 ) -> str:
-    """Fetch external web content and save it directly to the workspace. If convert_to_md is True, parses to Markdown."""
-
     def _fetch():
-        import config as app_config
+        result = _fetch_with_privacy(url)
 
-        proxy_url = (
-            app_config.cfg.get("settings", {})
-            .get("proxy", {})
-            .get("tor_proxy_url", "socks5h://tor-proxy:9050")
-        )
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-        resp = httpx.get(
-            url,
-            headers=headers,
-            timeout=30,
-            follow_redirects=True,
-            transport=_make_socks_transport(proxy_url),
-        )
+        if isinstance(result, str):
+            return result
+
+        resp = result
 
         if not convert_to_md:
-            return resp.content  # Raw bytes
+            return resp.content
 
         content_type = resp.headers.get("content-type", "").lower()
-        # Check actual bytes — a URL might say .pdf but serve HTML (JS-gated doc viewers)
         is_actual_pdf = resp.content[:4] == b"%PDF"
         is_pdf = is_actual_pdf or ("application/pdf" in content_type and is_actual_pdf)
 
         if is_pdf:
-            # Save to temp file, then parse locally
             import tempfile
 
             with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
                 tmp.write(resp.content)
                 tmp_path = tmp.name
+
             try:
-                # Try liteparse first (better spatial accuracy for PDFs)
                 import shutil
+                import subprocess
 
                 if shutil.which("liteparse"):
-                    import subprocess
-
-                    result = subprocess.run(
+                    parse_result = subprocess.run(
                         ["liteparse", tmp_path],
                         capture_output=True,
                         text=True,
                         timeout=60,
                     )
-                    if result.returncode == 0 and result.stdout.strip():
-                        return result.stdout
+                    if parse_result.returncode == 0 and parse_result.stdout.strip():
+                        return parse_result.stdout
 
-                # Fallback to markitdown on local file
                 try:
                     from utils.parsers import convert_to_markdown
 
@@ -258,46 +232,51 @@ async def fetch_url_to_workspace(
                 except ImportError:
                     pass
 
-                return f"[ERROR: PDF at {url} could not be parsed. Size: {len(resp.content)} bytes. Try a different source.]"
+                return (
+                    f"[ERROR: PDF at {url} could not be parsed. "
+                    f"Size: {len(resp.content)} bytes. Try a different source.]"
+                )
             finally:
                 os.unlink(tmp_path)
-        else:
-            # HTML path: try markitdown on local temp file first, then BeautifulSoup fallback
+
+        try:
+            import tempfile
+            from utils.parsers import convert_to_markdown
+
+            with tempfile.NamedTemporaryFile(
+                suffix=".html",
+                delete=False,
+                mode="wb",
+            ) as tmp:
+                tmp.write(resp.content)
+                tmp_path = tmp.name
+
             try:
-                import tempfile
+                md_content = convert_to_markdown(tmp_path)
+                if md_content:
+                    return md_content
+            finally:
+                os.unlink(tmp_path)
 
-                from utils.parsers import convert_to_markdown
+        except ImportError:
+            pass
 
-                with tempfile.NamedTemporaryFile(
-                    suffix=".html", delete=False, mode="wb"
-                ) as tmp:
-                    tmp.write(resp.content)
-                    tmp_path = tmp.name
-                try:
-                    md_content = convert_to_markdown(tmp_path)
-                    if md_content:
-                        return md_content
-                finally:
-                    os.unlink(tmp_path)
-            except ImportError:
-                pass
+        soup = BeautifulSoup(resp.text, "html.parser")
 
-            # BeautifulSoup fallback for HTML
-            soup = BeautifulSoup(resp.text, "html.parser")
-            for script in soup(["script", "style", "nav", "footer"]):
-                script.extract()
-            return "\n".join(
-                line
-                for line in (
-                    l.strip() for l in soup.get_text(separator="\n").splitlines()
-                )
-                if line
+        for tag in soup(["script", "style", "nav", "footer", "noscript"]):
+            tag.extract()
+
+        return "\n".join(
+            line
+            for line in (
+                l.strip() for l in soup.get_text(separator="\n").splitlines()
             )
+            if line
+        )
 
     try:
         data = await asyncio.to_thread(_fetch)
 
-        # Explicitly tag markdown files
         if convert_to_md and not filename.endswith(".md"):
             filename += ".md"
 
@@ -306,11 +285,11 @@ async def fetch_url_to_workspace(
             return f"Error: Invalid filename '{filename}'."
 
         if isinstance(data, str):
-            chunk = data[:5000000]  # Allow larger sizes for markdown text (up to 5MB)
+            chunk = data[:5000000]
             mode = "w"
             encoding = "utf-8"
         else:
-            chunk = data[:5000000]  # Cap raw binary at 5MB
+            chunk = data[:5000000]
             mode = "wb"
             encoding = None
 
@@ -318,16 +297,19 @@ async def fetch_url_to_workspace(
             parent_dir = os.path.dirname(path)
             if parent_dir:
                 os.makedirs(parent_dir, exist_ok=True)
+
             if encoding:
                 with open(path, mode, encoding=encoding) as f:
                     f.write(chunk)
             else:
                 with open(path, mode) as f:
                     f.write(chunk)
+
             return f"Fetched URL successfully to '{filename}' on disk."
-        else:
-            _IN_MEMORY_FS[path] = chunk
-            return f"Fetched URL successfully to '{filename}' in memory."
+
+        _IN_MEMORY_FS[path] = chunk
+        return f"Fetched URL successfully to '{filename}' in memory."
+
     except Exception as e:
         import traceback
 
@@ -340,162 +322,185 @@ async def web_search(
     max_results: int = 5,
     topic: str = "general",
 ) -> str:
-    """Search the web for information on a given query.
-
-    Searches both regular web engines AND Tor .onion sites (Ahmia/Torch).
-    Each call performs TWO SearXNG API searches and combines the results.
-
-    Args:
-        query: Search query to execute
-        max_results: Maximum number of results to return per source (default: 5)
-        topic: Topic filter - 'general', 'news', or 'finance' (default: 'general')
-
-    Returns:
-        Formatted search results with titles, URLs, snippets, and source tags ([web] / [tor])
-    """
     from tools.core import check_quota
 
     quota_error = check_quota("web_search")
     if quota_error:
         return quota_error
 
-    def _sanitize_snippet(text: str) -> str:
-        """Strip CSS, SVG, and HTML artifacts from search snippets."""
-        text = re.sub(r"<svg[\s\S]*?</svg>", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"<style[\s\S]*?</style>", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"<[^>]+>", "", text)
-        text = re.sub(r"(?:[\w-]+=(?:'[^']*'|\"[^\"]*\")[\s]*){3,}", "", text)
-        text = re.sub(r"%3[CEce][^%\s]{10,}", "", text)
-        return re.sub(r"\s+", " ", text).strip()
+    def _format_result(
+        title: str,
+        url: str,
+        engine: str,
+        snippet: str,
+        source_label: str,
+    ) -> str:
+        return (
+            f"## [{source_label}] {title}\n"
+            f"**URL:** {url}\n"
+            f"**Engine:** {engine}\n"
+            f"**Snippet:** {snippet}\n"
+        )
 
-    def _search_searxng(client, base_url, search_query, engines, max_res):
-        """Search via SearXNG API and return parsed results.
+    def _search_searxng(
+        client: httpx.Client,
+        base_url: str,
+        search_query: str,
+        max_res: int,
+        source_label: str,
+        engines: str | None = None,
+    ) -> list[str]:
+        params = {
+            "q": search_query,
+            "format": "json",
+        }
 
-        Returns a list of dicts with keys: title, url, snippet, source_tag, engine
-        """
-        results = []
-        try:
-            params = {
-                "q": search_query,
-                "format": "json",
-                "engines": engines,
-            }
-            resp = client.get(f"{base_url}/search", params=params, timeout=30)
-            resp.raise_for_status()
-            data = resp.json()
+        if engines:
+            params["engines"] = engines
 
-            for r in data.get("results", []):
-                url = r.get("url", "")
-                title = r.get("title", "")
-                snippet = _sanitize_snippet(
-                    r.get("content", r.get("snippet", "No snippet available"))
-                )
-                results.append(
-                    {
-                        "title": title,
-                        "url": url,
-                        "snippet": snippet,
-                        "engine": r.get("engine", ""),
-                    }
-                )
-                if len(results) >= max_res:
-                    break
-        except Exception as e:
-            results.append(
-                {
-                    "title": f"[SearXNG error ({engines}): {e}]",
-                    "url": "",
-                    "snippet": "",
-                    "engine": "",
-                }
+        resp = client.get(
+            f"{base_url}/search",
+            params=params,
+            timeout=30,
+        )
+        resp.raise_for_status()
+
+        data = resp.json()
+        raw_results = data.get("results", [])
+
+        formatted = []
+
+        for item in raw_results[:max_res]:
+            title = item.get("title", "")
+            url = item.get("url", "")
+            engine = item.get("engine", "")
+            snippet = _sanitize_snippet(
+                item.get("content")
+                or item.get("snippet")
+                or "No snippet available"
             )
-        return results
+
+            if not title and not url:
+                continue
+
+            formatted.append(
+                _format_result(
+                    title=title,
+                    url=url,
+                    engine=engine,
+                    snippet=snippet,
+                    source_label=source_label,
+                )
+            )
+
+        return formatted
 
     def _do_search():
         import config as app_config
 
-        # Determine search provider
         search_cfg = app_config.cfg.get("settings", {}).get("search", {})
-        provider = search_cfg.get("provider", "searxng")
+        provider = search_cfg.get("provider")
 
-        # Fallback to legacy search_provider key if provider not set in new config
-        if not search_cfg:
+        if not provider:
             provider = app_config.cfg.get("settings", {}).get(
-                "search_provider", "duckduckgo"
+                "search_provider",
+                "searxng",
             )
 
         result_texts = []
 
         if provider == "searxng":
             searxng_cfg = search_cfg.get("searxng", {})
-            base_url = searxng_cfg.get("base_url", "http://tor-searxng:8888")
-            tor_engines = searxng_cfg.get("tor_engines", "ahmia,torch")
-            standard_engines = searxng_cfg.get(
-                "standard_engines", "google,duckduckgo,bing,brave,wikipedia"
-            )
+
+            base_url = searxng_cfg.get(
+                "base_url",
+                "http://tor-searxng:8888",
+            ).rstrip("/")
+
+            standard_engines = searxng_cfg.get("standard_engines")
+            enable_onion_search = searxng_cfg.get("enable_onion_search", True)
+            onion_query = f"!ahmia !torch {query}"
 
             client = get_searxng_client()
 
-            # --- Search 1: Standard web engines ---
-            web_results = _search_searxng(
-                client, base_url, query, standard_engines, max_results
-            )
-            for r in web_results:
-                result_texts.append(
-                    f"## [web] {r['title']}\n"
-                    f"**URL:** {r['url']}\n"
-                    f"**Engine:** {r['engine']}\n"
-                    f"**Snippet:** {r['snippet']}\n"
+            try:
+                result_texts.extend(
+                    _search_searxng(
+                        client=client,
+                        base_url=base_url,
+                        search_query=query,
+                        max_res=max_results,
+                        source_label="web",
+                        engines=standard_engines,
+                    )
                 )
+            except Exception as e:
+                result_texts.append(f"[SearXNG web search failed: {e}]")
 
-            # --- Search 2: Tor .onion engines (!ahmia !torch) ---
-            tor_results = _search_searxng(
-                client, base_url, f"!ahmia !torch {query}", tor_engines, max_results
-            )
-            for r in tor_results:
-                result_texts.append(
-                    f"## [tor] {r['title']}\n"
-                    f"**URL:** {r['url']}\n"
-                    f"**Engine:** {r['engine']}\n"
-                    f"**Snippet:** {r['snippet']}\n"
-                )
+            if enable_onion_search:
+                try:
+                    result_texts.extend(
+                        _search_searxng(
+                            client=client,
+                            base_url=base_url,
+                            search_query=onion_query,
+                            max_res=max_results,
+                            source_label="tor",
+                            engines=None,
+                        )
+                    )
+                except Exception as e:
+                    result_texts.append(f"[SearXNG onion search failed: {e}]")
 
-        elif provider == "duckduckgo" or provider not in (
-            "duckduckgo",
-            "tavily",
-            "searxng",
-        ):
-            # Default/fallback: DuckDuckGo (free, no API key required)
-            from ddgs import DDGS
-
+        elif provider == "duckduckgo":
             client = get_ddgs_client()
 
-            if topic == "news":
-                search_results = client.news(query, max_results=max_results)
-                for result in search_results:
-                    url = result.get("url", "")
-                    title = result.get("title", "")
-                    snippet = _sanitize_snippet(
-                        result.get("body", "No snippet available")
-                    )
-                    result_texts.append(
-                        f"## {title}\n**URL:** {url}\n**Snippet:** {snippet}\n"
-                    )
-            else:
-                search_results = client.text(query, max_results=max_results)
-                for result in search_results:
-                    url = result.get("href", "")
-                    title = result.get("title", "")
-                    snippet = _sanitize_snippet(
-                        result.get("body", "No snippet available")
-                    )
-                    result_texts.append(
-                        f"## {title}\n**URL:** {url}\n**Snippet:** {snippet}\n"
-                    )
-        elif provider == "tavily":
-            pass  # Removed Tavily placeholder to avoid undefined get_tavily_client() error in scaffold
+            try:
+                if topic == "news":
+                    search_results = client.news(query, max_results=max_results)
+                    for result in search_results:
+                        result_texts.append(
+                            _format_result(
+                                title=result.get("title", ""),
+                                url=result.get("url", ""),
+                                engine="duckduckgo-news",
+                                snippet=_sanitize_snippet(
+                                    result.get("body", "No snippet available")
+                                ),
+                                source_label="web",
+                            )
+                        )
+                else:
+                    search_results = client.text(query, max_results=max_results)
+                    for result in search_results:
+                        result_texts.append(
+                            _format_result(
+                                title=result.get("title", ""),
+                                url=result.get("href", ""),
+                                engine="duckduckgo",
+                                snippet=_sanitize_snippet(
+                                    result.get("body", "No snippet available")
+                                ),
+                                source_label="web",
+                            )
+                        )
 
-        return f"🔍 Found {len(result_texts)} result(s) for '{query}':\n\n{chr(10).join(result_texts)}"
+            except Exception as e:
+                result_texts.append(f"[DuckDuckGo search failed: {e}]")
+
+        else:
+            result_texts.append(
+                f"[Unsupported search provider: {provider}. "
+                f"Set settings.search.provider to searxng.]"
+            )
+
+        if not result_texts:
+            return f"Found 0 result(s) for '{query}'."
+
+        return (
+            f"Found {len(result_texts)} result(s) for '{query}':\n\n"
+            f"{chr(10).join(result_texts)}"
+        )
 
     try:
         return await asyncio.to_thread(_do_search)

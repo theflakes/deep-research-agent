@@ -1,0 +1,2 @@
+[console_scripts]
+deep-research-agent = src.app:cli_main

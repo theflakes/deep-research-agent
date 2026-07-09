@@ -1,0 +1,11 @@
+agent-framework
+python-dotenv
+httpx[socks]
+textual
+beautifulsoup4
+PyYAML
+pyfiglet
+ddgs
+markitdown[all]
+socksio
+textual-serve

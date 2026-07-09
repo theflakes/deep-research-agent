@@ -9,13 +9,38 @@ settings:
       # Each web_search does TWO API calls:
       #   1) Standard engines (google, duckduckgo, bing, brave, wikipedia) — regular web results
       #   2) Tor engines (!ahmia !torch) — .onion site results
-      tor_engines: ahmia,torch
-      standard_engines: google,duckduckgo,bing,brave,wikipedia
+      enable_onion_search: true
+      # tor_engines: ahmia,torch
+      # standard_engines: google,duckduckgo,bing,brave,wikipedia
   proxy:
     # ALL network connections MUST route through this Tor SOCKS5h proxy.
     # socks5h means DNS resolution also happens through Tor (no DNS leaks).
     # Applies to: web_search, fetch_url_to_workspace, markitdown, DDGS fallback.
     tor_proxy_url: socks5h://tor-proxy:9050
+  fetch:
+    rotate_browser_profile: false
+    browser_profiles:
+      chrome_windows:
+        User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+        Accept-Language: "en-US,en;q=0.9"
+        Accept-Encoding: "gzip, deflate, br"
+        Cache-Control: "max-age=0"
+        Upgrade-Insecure-Requests: "1"
+      chrome_linux:
+        User-Agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+        Accept-Language: "en-US,en;q=0.9"
+        Accept-Encoding: "gzip, deflate, br"
+        Cache-Control: "max-age=0"
+        Upgrade-Insecure-Requests: "1"
+      firefox_windows:
+        User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0"
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        Accept-Language: "en-US,en;q=0.9"
+        Accept-Encoding: "gzip, deflate, br"
+        DNT: "1"
+        Upgrade-Insecure-Requests: "1"
   enable_thinking: false
   concurrency:
     max_concurrent_tasks: 3
@@ -26,7 +51,7 @@ settings:
     # e.g. "web_search: 10" becomes {web_search_quota} = 10 in your prompts.
     # Both flat integers and dict-with-limit are supported.
     delegate_tasks: 20
-    web_search: 10
+    web_search: 20
     fetch_url_to_workspace: 20
     write_workspace_file: 20
     write_todos: 30
