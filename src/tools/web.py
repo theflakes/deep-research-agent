@@ -96,7 +96,8 @@ class _SOCKSTransport(httpx.BaseTransport):
             if resp[3] == 1:  # IPv4
                 sock.recv(6)
             elif resp[3] == 3:  # Domain
-                sock.recv(1 + sock.recv(1)[0] + 2)
+                domain_len = sock.recv(1)[0]
+                sock.recv(domain_len + 2)
             elif resp[3] == 4:  # IPv6
                 sock.recv(20)
 
