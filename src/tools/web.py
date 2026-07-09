@@ -67,40 +67,47 @@ class _SOCKSTransport(httpx.BaseTransport):
         target_port = request.url.port or (443 if request.url.scheme == "https" else 80)
         sock = socket.create_connection((proxy_host, proxy_port), timeout=30)
         try:
-            # Manual SOCKS5 handshake (socksio.socks5.socks5_client was removed in socksio 1.1+)
-            # Step 1: Send greeting with supported auth methods
+            # SOCKS5 handshake
+            # Step 1: Send greeting
             if username and password:
-                sock.sendall(b"\x05\x02\x00\x02")  # ver 5, methods: none, username/password
+                sock.sendall(b"\x05\x02\x00\x02")  # ver 5, methods: none + auth
             else:
                 sock.sendall(b"\x05\x01\x00")  # ver 5, method: none
-
             resp = sock.recv(2)
             if resp[0] != 0x05 or resp[1] == 0xFF:
                 raise RuntimeError("SOCKS5 greeting failed")
-
-            # Step 2: If auth required, send credentials
             if resp[1] == 0x02:
                 cred = b"\x01" + bytes([len(username)]) + username.encode() + bytes([len(password)]) + password.encode()
                 sock.sendall(cred)
                 if sock.recv(2)[1] != 0:
                     raise RuntimeError("SOCKS5 auth failed")
 
-            # Step 3: Send CONNECT request
-            cmd = b"\x05\x01\x00\x03" + bytes([len(target_host)]) + target_host.encode() + target_port.to_bytes(2, "big")
+            # Step 2: Build CONNECT request with correct address type
+            try:
+                import ipaddress
+                ip = ipaddress.ip_address(target_host)
+                if isinstance(ip, ipaddress.IPv4Address):
+                    cmd = b"\x05\x01\x00\x01" + socket.inet_aton(target_host) + target_port.to_bytes(2, "big")
+                else:
+                    cmd = b"\x05\x01\x00\x04" + socket.inet_pton(socket.AF_INET6, target_host) + target_port.to_bytes(2, "big")
+            except ValueError:
+                cmd = b"\x05\x01\x00\x03" + bytes([len(target_host)]) + target_host.encode() + target_port.to_bytes(2, "big")
             sock.sendall(cmd)
 
-            # Step 4: Receive CONNECT response and skip bind address
+            # Step 3: Receive CONNECT response and skip bind address
             resp = sock.recv(4)
             if resp[0] != 0x05 or resp[1] != 0:
                 raise RuntimeError(f"SOCKS5 CONNECT failed: {resp[1]}")
-            if resp[3] == 1:  # IPv4
+            atyp = resp[3]
+            if atyp == 1:  # IPv4
                 sock.recv(6)
-            elif resp[3] == 3:  # Domain
-                domain_len = sock.recv(1)[0]
-                sock.recv(domain_len + 2)
-            elif resp[3] == 4:  # IPv6
-                sock.recv(20)
+            elif atyp == 3:  # Domain
+                dlen = sock.recv(1)[0]
+                sock.recv(dlen + 2)
+            elif atyp == 4:  # IPv6
+                sock.recv(18)
 
+            # Step 4: Send HTTP request
             if request.url.scheme == "https":
                 conn = ssl.create_default_context().wrap_socket(sock, server_hostname=target_host)
             else:
