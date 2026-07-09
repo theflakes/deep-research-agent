@@ -108,5 +108,3 @@ docker compose ps
 
 * **TUI Execution:** The `--rm` flag appended to the `docker compose run` command automatically deletes the transient interactive container container instance when you exit the TUI, keeping your Docker system footprint completely clean.
 * **Persistent Artifacts:** Because of the host volume mount (`~/.deep-research-agent`), all markdown reports, timestamped session isolation blocks, and generated research data are preserved on your physical machine inside `~/.deep-research-agent/workspace/`.
-
-```
