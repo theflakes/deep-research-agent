@@ -19,6 +19,7 @@ dependencies = [
     "pyfiglet",
     "ddgs",
     "markitdown[all]",
+    "socksio",
     "textual-serve",
 ]
 

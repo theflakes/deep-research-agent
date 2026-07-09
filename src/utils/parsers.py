@@ -41,11 +41,19 @@ def _get_markitdown():
             .get("tor_proxy_url", "socks5h://tor-proxy:9050")
         )
         if _httpx_available:
-            httpx_client = httpx.Client(
-                timeout=30,
-                mounts={"all://": httpx.SOCKSTransport(proxy_url)},
-            )
-            _markitdown_instance = MarkItDown(httpx_client=httpx_client)
+            if not hasattr(httpx, "SOCKSTransport"):
+                logging.warning(
+                    "httpx[socks] is not installed (socksio missing). "
+                    "MarkItDown URL fetching will NOT route through Tor. "
+                    "Run: pip install httpx[socks] or pip install socksio"
+                )
+                _markitdown_instance = MarkItDown()
+            else:
+                httpx_client = httpx.Client(
+                    timeout=30,
+                    mounts={"all://": httpx.SOCKSTransport(proxy_url)},
+                )
+                _markitdown_instance = MarkItDown(httpx_client=httpx_client)
         else:
             _markitdown_instance = MarkItDown()
     except Exception:
