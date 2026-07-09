@@ -96,7 +96,7 @@ class _SOCKSTransport(httpx.BaseTransport):
                 body = resp_data[sep + 4 :]
             else:
                 hdr = resp_data
-                body = b"""
+                body = b""
             lines = hdr.split(b"\r\n")
             parts = lines[0].decode("utf-8", errors="replace").split(" ", 2)
             status_code = int(parts[1]) if len(parts) > 1 else 500
