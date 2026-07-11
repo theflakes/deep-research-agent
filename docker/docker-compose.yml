@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # Tor SOCKS Proxy matching configuration key 'tor_proxy_url: socks5h://tor-proxy:9050'
   tor-proxy:
-    image: peterdavehello/tor-socks-proxy:latest
+    image: heywoodlh/tor-socks-proxy:latest
     container_name: tor-proxy
     restart: unless-stopped
     networks:
