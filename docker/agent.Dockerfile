@@ -43,4 +43,4 @@ RUN if pip show playwright > /dev/null 2>&1; then \
     fi
 
 # Fire up the application's core TUI script automatically at run time
-CMD ["python", "app.py"]
+CMD ["python", "/app/src/app.py"]
