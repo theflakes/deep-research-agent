@@ -6,7 +6,7 @@ settings:
   search:
     provider: searxng
     searxng:
-      base_url: http://tor-searxng:8080
+      base_url: http://tor-searxng:8888
       # Each web_search does TWO API calls:
       #   1) Standard engines (google, duckduckgo, bing, brave, wikipedia) — regular web results
       #   2) Tor engines (!ahmia !torch) — .onion site results
@@ -17,7 +17,7 @@ settings:
     # ALL network connections MUST route through this Tor SOCKS5h proxy.
     # socks5h means DNS resolution also happens through Tor (no DNS leaks).
     # Applies to: web_search, fetch_url_to_workspace, markitdown, DDGS fallback.
-    tor_proxy_url: socks5h://tor-proxy:9150
+    tor_proxy_url: socks5h://tor-proxy:9050
   fetch:
     rotate_browser_profile: false
     browser_profiles:
