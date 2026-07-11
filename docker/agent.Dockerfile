@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrandr2 \
     libgbm1 \
     libpango-1.0-0 \
-    asound2 \
+    libasound2t64 \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
@@ -37,7 +37,7 @@ RUN git clone https://github.com/theflakes/deep-research-agent.git .
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
     && pip install --no-cache-dir -e .
 
-# Pre-fetch and bake in the required browser engines 
+# Pre-fetch and bake in the required browser engines
 RUN if pip show playwright > /dev/null 2>&1; then \
         python -m playwright install chromium --with-deps; \
     fi
