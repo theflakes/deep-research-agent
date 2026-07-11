@@ -136,3 +136,225 @@ docker compose ps
 
 * **TUI Execution:** The `--rm` flag appended to the `docker compose run` command automatically deletes the transient interactive container container instance when you exit the TUI, keeping your Docker system footprint completely clean.
 * **Persistent Artifacts:** Because of the host volume mount (`~/.deep-research-agent`), all markdown reports, timestamped session isolation blocks, and generated research data are preserved on your physical machine inside `~/.deep-research-agent/workspace/`.
+
+
+# Resetting the Deep Research Agent Docker Environment
+
+If you want to completely remove the existing Docker environment and start from a clean slate, follow these steps.
+
+## 1. Stop and Remove the Project
+
+From the project's `docker/` directory:
+
+```bash
+docker compose down --volumes --remove-orphans
+```
+
+This removes:
+
+- All containers
+- The Docker network
+- Named volumes
+- Any orphaned containers from previous runs
+
+---
+
+## 2. Remove Any Remaining Containers
+
+```bash
+docker rm -f $(docker ps -aq)
+```
+
+---
+
+## 3. Remove Unused Images, Networks, and Volumes
+
+```bash
+docker system prune -a --volumes
+```
+
+Or skip the confirmation prompt:
+
+```bash
+docker system prune -a --volumes -f
+```
+
+---
+
+## 4. (Optional) Remove the Project Images
+
+If you want to ensure Docker rebuilds everything from scratch:
+
+```bash
+docker images
+```
+
+Then remove the project images:
+
+```bash
+docker rmi docker-research-agent
+docker rmi searxng/searxng:latest
+docker rmi heywoodlh/tor-socks-proxy:latest
+docker rmi redis:7-alpine
+```
+
+---
+
+## 5. Verify Docker is Clean
+
+```bash
+docker ps -a
+docker images
+docker network ls
+docker volume ls
+```
+
+There should be no containers from the project remaining.
+
+---
+
+# Rebuild
+
+From the `docker/` directory:
+
+```bash
+docker compose build --no-cache
+docker compose up
+```
+
+Or run in detached mode:
+
+```bash
+docker compose up -d
+```
+
+---
+
+# Verify Everything Started
+
+```bash
+docker ps
+```
+
+Expected containers:
+
+- `deep-research-agent`
+- `tor-proxy`
+- `tor-searxng`
+- `searxng-redis`
+
+---
+
+# View Logs
+
+Entire stack:
+
+```bash
+docker compose logs -f
+```
+
+Research agent:
+
+```bash
+docker logs -f deep-research-agent
+```
+
+SearXNG:
+
+```bash
+docker logs -f tor-searxng
+```
+
+Tor Proxy:
+
+```bash
+docker logs -f tor-proxy
+```
+
+Redis:
+
+```bash
+docker logs -f searxng-redis
+```
+
+---
+
+# Common Troubleshooting
+
+### SearXNG continually restarts
+
+Verify the proxy configuration points to:
+
+```
+tor-proxy:9150
+```
+
+**NOT**
+
+```
+tor-proxy:9050
+```
+
+---
+
+### Agent cannot reach SearXNG
+
+Containers on the Docker bridge network should use:
+
+```
+http://tor-searxng:8080
+```
+
+Do **not** use `8888` for container-to-container communication unless you have explicitly reconfigured the container's internal listening port.
+
+---
+
+### Tor Proxy Health
+
+A healthy Tor proxy will eventually log:
+
+```
+Bootstrapped 100% (done): Done
+```
+
+---
+
+# Useful Docker Commands
+
+Show running containers:
+
+```bash
+docker ps
+```
+
+Show all containers:
+
+```bash
+docker ps -a
+```
+
+Watch logs:
+
+```bash
+docker compose logs -f
+```
+
+Open a shell inside a container:
+
+```bash
+docker exec -it <container-name> sh
+```
+
+Inspect container configuration:
+
+```bash
+docker inspect <container-name>
+```
+
+View listening ports inside a container:
+
+```bash
+docker exec -it <container-name> ss -lnt
+```
+
+---
