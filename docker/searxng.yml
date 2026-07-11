@@ -6,7 +6,7 @@ general:
   contact_url: false
 server:
   bind_address: "0.0.0.0"
-  port: 8888
+  port: 8080
   secret_key: "6dcfb437298a0efca1139ad429efcb93" # Randomized placeholder
   limiter: false
   image_proxy: true
@@ -39,6 +39,6 @@ outgoing:
   request_timeout: 5.0
   proxies:
     all://:
-      - socks5h://tor-proxy:9050
+      - socks5h://tor-proxy:9150
   using_tor_proxy: true
   extra_proxy_timeout: 30
