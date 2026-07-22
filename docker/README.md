@@ -58,7 +58,7 @@ docker compose up -d tor-proxy searxng-redis tor-searxng
 To execute the application and use the interactive keyboard/terminal UI interface natively on your host shell without manual container entry, run:
 
 ```bash
-docker compose run --rm research-agent python main.py
+docker compose run --rm research-agent python src/app.py
 
 ```
 
